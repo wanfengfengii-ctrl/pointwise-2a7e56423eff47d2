@@ -19,11 +19,15 @@ def build_ranking_event(frame, request):
     return RankingEvent(frame, request)
 
 
+def selection_flags(event, values):
+    """严格高于某站的站点数少于名额k即入选，并列全部保留。"""
+    return tuple(sum(1 for other in values if other > value) < event.request.k
+                 for value in values)
+
+
 def selected_at_point(event, u, v):
-    ordered = sorted(event.frame.scores,
-                     key=lambda s: (-s.at(u, v), s.station))
-    selected = {s.coordinate for s in ordered[:event.request.k]}
-    return tuple(i in selected for i in event.request.coordinates)
+    flags = selection_flags(event, [s.at(u, v) for s in event.frame.scores])
+    return tuple(flags[i] for i in event.request.coordinates)
 
 
 def comparison_probability(first, second, support):
@@ -31,21 +35,42 @@ def comparison_probability(first, second, support):
     b = first.b - second.b
     c = first.c - second.c
     if b == c == 0:
-        return Fraction(int(a > 0 or (a == 0 and first.station < second.station)))
+        return Fraction(int(a > 0))
     area = polygon_area(support)
     return polygon_area(clip_halfplane(support, HalfPlane(a, b, c))) / area
 
 
-def rank_probability(event, coordinate, support):
-    target = event.frame.scores[coordinate]
-    counts = [Fraction(1)]
-    for other in event.frame.scores:
-        if other.coordinate == coordinate:
+def iter_event_regions(event, support):
+    """有限枚举支撑集上排名恒定的事件区域，产出(面积, 各站入选标志)。
+
+    用全部成对评分差半平面裁剪支撑多边形；每一切片内排名不变，
+    分割线测度为零，恒等评分及并列在切片内部完整保留。
+    """
+    cells = [list(support)]
+    for i, first in enumerate(event.frame.scores):
+        for second in event.frame.scores[i + 1:]:
+            a = first.a - second.a
+            b = first.b - second.b
+            c = first.c - second.c
+            if b == 0 and c == 0:
+                continue
+            plane = HalfPlane(a, b, c)
+            mirror = HalfPlane(-a, -b, -c)
+            cells = [piece for cell in cells
+                     for piece in (clip_halfplane(cell, plane),
+                                   clip_halfplane(cell, mirror))
+                     if polygon_area(piece) > 0]
+    for cell in cells:
+        area = polygon_area(cell)
+        if area <= 0:
             continue
-        probability = comparison_probability(other, target, support)
-        updated = [Fraction(0)] * (len(counts) + 1)
-        for count, mass in enumerate(counts):
-            updated[count] += mass * (1 - probability)
-            updated[count + 1] += mass * probability
-        counts = updated
-    return sum(counts[:event.request.k], Fraction(0))
+        u = sum((p[0] for p in cell), Fraction(0)) / len(cell)
+        v = sum((p[1] for p in cell), Fraction(0)) / len(cell)
+        yield area, selection_flags(event, [s.at(u, v) for s in event.frame.scores])
+
+
+def rank_probability(event, coordinate, support):
+    total = polygon_area(support)
+    selected = sum((area for area, flags in iter_event_regions(event, support)
+                    if flags[coordinate]), Fraction(0))
+    return selected / total

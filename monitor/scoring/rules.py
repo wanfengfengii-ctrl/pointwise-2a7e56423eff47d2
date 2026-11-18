@@ -18,4 +18,4 @@ def assert_rule_applicable(observation, rule):
 def apply_affine_rule(observation, rule):
     assert_rule_applicable(observation, rule)
     return (rule.delta + rule.alpha * observation.x,
-            abs(rule.beta * observation.r_u), abs(rule.gamma * observation.r_v))
+            rule.beta * observation.r_u, rule.gamma * observation.r_v)
